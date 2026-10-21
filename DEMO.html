@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+    html,body{margin:0;background:#111;overflow:hidden;}
+    canvas{display:block;background:#2b2b3a;cursor:none;}
+    #hud{position:fixed;top:10px;left:10px;color:#fff;font-family:monospace;font-size:14px;}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">Score: 0</div>
+<div id="upgrade-screen" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);
+  align-items:center;justify-content:center;gap:20px;z-index:10;"></div>
+<audio id="bgMusic" src="audio/musica.mp3" loop></audio>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+const sprites = {
+  player: new Image(),
+  grunt: new Image(),
+  runner: new Image(),
+  tank: new Image(),
+  boss: new Image(),
+  bullet: new Image(),
+  floor: new Image(),
+  heartIcon: new Image(),
+  xpIcon: new Image(),
+  crosshair: new Image(),
+  floor: new Image(),
+};
+// COMEÇO SPRITES PARA O FUNDO DO MAPA
+const decorationSprites = [new Image(), new Image(), new Image(), new Image(), new Image()];
+decorationSprites[0].src = 'sprites/grass1.png';
+decorationSprites[1].src = 'sprites/grass2.png';
+decorationSprites[2].src = 'sprites/rock1.png';
+decorationSprites[3].src = 'sprites/tree1.png';
+decorationSprites[4].src = 'sprites/tree2.png';
+// FIM SPRITES PARA O FUNDO DO MAPA
+sprites.player.src = 'sprites/player.png';
+sprites.grunt.src = 'sprites/grunt.png';
+sprites.runner.src = 'sprites/runner.png';
+sprites.tank.src = 'sprites/tank.png';
+sprites.boss.src = 'sprites/boss.png';
+sprites.bullet.src = 'sprites/bullet.png';
+sprites.heartIcon.src = 'sprites/heart.png';
+sprites.xpIcon.src = 'sprites/star.png';
+sprites.crosshair.src = 'sprites/crosshair.png';
+sprites.floor.src = 'sprites/floor.png';
+
+let floorPattern = null;
+sprites.floor.onload = () => {
+  floorPattern = ctx.createPattern(sprites.floor, 'repeat');
+};
+
+// MOUSE (MIRA)
+const mouse = { x: 0, y: 0 };
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = e.clientX - rect.left;
+  mouse.y = e.clientY - rect.top;
+});
+
+function drawCrosshair(){
+  const size = 32;
+  ctx.drawImage(sprites.crosshair, mouse.x - size/2, mouse.y - size/2, size, size);
+}
+
+// MÚSICA
+const bgMusic = document.getElementById('bgMusic');
+bgMusic.volume = 0.1; // 10% do volume
+let musicStarted = false;
+window.addEventListener('keydown', () => {
+    if (!musicStarted) {
+        bgMusic.play().then(() => {
+            musicStarted = true;
+        }).catch(error => {
+            console.log('Não foi possível iniciar a música:', error);
+        });
+    }
+});
+
+// MUNDO, CÂMERA E JOGADOR ENTRAM AQUI
+const world = { width: 3000, height: 3000 };
+const keys = {};
+window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+// COMEÇO LOGICA DECORAÇOES DE FUNDO
+const decorations = [];
+const cellSize = 150;     // espaçamento minimo entre decorações
+const spawnChance = 0.5;  // 50% de chance de nascer uma decoração em cada celula
+
+for (let x = 0; x < world.width; x += cellSize){
+  for (let y = 0; y < world.height; y += cellSize){
+    if (Math.random() < spawnChance){
+      decorations.push({
+        x: x + Math.random() * cellSize,
+        y: y + Math.random() * cellSize,
+        sprite: decorationSprites[Math.floor(Math.random() * decorationSprites.length)],
+        size: 28 + Math.random() * 16 // variacao leve de tamanho, fica mais orgânico
+      });
+    }
+  }
+}
+
+function drawDecorations(){
+  for (const d of decorations){
+    // culling: pula quem está fora da tela, evita desenhar milhares de sprites à toa
+    if (d.x - camera.x < -50 || d.x - camera.x > canvas.width + 50) continue;
+    if (d.y - camera.y < -50 || d.y - camera.y > canvas.height + 50) continue;
+    ctx.drawImage(d.sprite, d.x - camera.x - d.size/2, d.y - camera.y - d.size/2, d.size, d.size);
+  }
+}
+//FIM LOGICA DECORAÇOES DE FUNDO
+const player = {
+  x: world.width/2, y: world.height/2,
+  radius: 16, speed: 250, hp: 70, maxHp: 100,
+  level: 1, xp: 0, xpToNext: 50
+};
+
+const camera = { x: 0, y: 0 };
+
+function updatePlayer(dt){
+  let dx = 0, dy = 0;
+  if (keys['w'] || keys['arrowup']) dy -= 1;
+  if (keys['s'] || keys['arrowdown']) dy += 1;
+  if (keys['a'] || keys['arrowleft']) dx -= 1;
+  if (keys['d'] || keys['arrowright']) dx += 1;
+  const len = Math.hypot(dx, dy) || 1;
+  player.x += (dx/len) * player.speed * dt;
+  player.y += (dy/len) * player.speed * dt;
+}
+
+function updateCamera(){
+  camera.x = player.x - canvas.width/2;
+  camera.y = player.y - canvas.height/2;
+}
+
+function drawWorldBackground(){
+  if (floorPattern){
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+    ctx.fillStyle = floorPattern;
+    ctx.fillRect(0, 0, world.width, world.height);
+    ctx.restore();
+  } else {
+    // fallback enquanto o PNG não carrega
+    ctx.fillStyle = '#23232f';
+    ctx.fillRect(-camera.x, -camera.y, world.width, world.height);
+  }
+}
+
+function drawPlayer(){
+  const size = player.radius * 2;
+  ctx.drawImage(
+    sprites.player,
+    player.x - camera.x - player.radius,
+    player.y - camera.y - player.radius,
+    size, size
+  );
+}
+//FIM DO BLOCO MUNDO/CÂMERA/JOGADOR
+// COMEÇO DO BLOCO/ARMA
+const weapon = {
+  damage: 10,
+  fireRate: 0.5,
+  timer: 0,
+  range: 400
+};
+let projectiles = [];
+
+function updateWeapon(dt){
+  weapon.timer -= dt;
+  if (weapon.timer <= 0){
+    const ang = Math.atan2(mouse.y - canvas.height/2, mouse.x - canvas.width/2);
+    projectiles.push({
+      x: player.x, y: player.y,
+      vx: Math.cos(ang) * 500, vy: Math.sin(ang) * 500,
+      damage: weapon.damage, radius: 5, life: 2
+    });
+    weapon.timer = weapon.fireRate;
+  }
+}
+
+function updateProjectiles(dt){
+  for (let i = projectiles.length - 1; i >= 0; i--){
+    const p = projectiles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life -= dt;
+    if (p.life <= 0) projectiles.splice(i, 1);
+  }
+}
+
+function drawProjectiles(){
+  for (const p of projectiles){
+    const angle = Math.atan2(p.vy, p.vx);
+    const size = p.radius * 3;
+    ctx.save();
+    ctx.translate(p.x - camera.x, p.y - camera.y);
+    ctx.rotate(angle);
+    ctx.drawImage(sprites.bullet, -size/2, -size/2, size, size);
+    ctx.restore();
+  }
+}
+
+function findNearestEnemy(x, y, maxRange){
+  let best = null, bestDist = maxRange;
+  for (const e of enemies){
+    const d = Math.hypot(e.x - x, e.y - y);
+    if (d < bestDist){ bestDist = d; best = e; }
+  }
+  if (boss){
+    const d = Math.hypot(boss.x - x, boss.y - y);
+    if (d < bestDist){ bestDist = d; best = boss; }
+  }
+  return best;
+}
+//FIM DO BLOCO/ARMA
+//COMEÇO DO BLOCO/INIMIGOS
+let enemies = [];
+let spawnTimer = 0;
+let spawnInterval = 2;
+
+function spawnWave(count){
+  for (let i = 0; i < count; i++){
+    spawnEnemy(currentEnemyPool());
+  }
+}
+
+function spawnEnemy(type){
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 700;
+  enemies.push({
+    x: player.x + Math.cos(angle) * dist,
+    y: player.y + Math.sin(angle) * dist,
+    hp: type.hp, maxHp: type.hp, speed: type.speed,
+    radius: type.radius, damage: type.damage, color: type.color, xp: type.xp,
+    sprite: type.sprite
+  });
+}
+
+function updateSpawning(dt){
+  spawnTimer -= dt;
+  if (spawnTimer <= 0){
+    const waveSize = Math.min(4 + player.level * 4, 100); // cresce com o nível, com teto de 100
+    spawnWave(waveSize);
+    spawnTimer = spawnInterval;
+  }
+}
+
+function updateEnemies(dt){
+  for (const e of enemies){
+    const ang = Math.atan2(player.y - e.y, player.x - e.x);
+    e.x += Math.cos(ang) * e.speed * dt;
+    e.y += Math.sin(ang) * e.speed * dt;
+  }
+}
+
+function drawEnemies(){
+  for (const e of enemies){
+    const size = e.radius * 2;
+    ctx.drawImage(e.sprite, e.x - camera.x - e.radius, e.y - camera.y - e.radius, size, size);
+  }
+}
+//FIM DO BLOCO/INIMIGOS
+//COMEÇO DO BLOCO/COLISOES, DANO E VIDA
+function circlehit(c1, c2){
+  const dx = c1.x - c2.x;
+  const dy = c1.y - c2.y;
+  const distSq = dx*dx + dy*dy;
+  const radSum = c1.radius + c2.radius;
+  return distSq <= radSum * radSum;
+}
+
+function updateCollisions(dt){
+  for (let i = enemies.length - 1; i >= 0; i--){
+    const e = enemies[i];
+    for (let j = projectiles.length - 1; j >= 0; j--){
+      const p = projectiles[j];
+      if (circlehit(e, p)){
+        e.hp -= p.damage;
+        projectiles.splice(j, 1);
+        if (e.hp <= 0){
+          xpOrbs.push({ x: e.x, y: e.y, value: e.xp, radius: 6 });
+          enemies.splice(i, 1);
+          break;
+        }
+      }
+    }
+  }
+
+  player._hurtCooldown = (player._hurtCooldown || 0) - dt;
+  for (const e of enemies){
+    if (circlehit(player, e)){
+      if (player._hurtCooldown <= 0){
+        player.hp -= e.damage;
+        player._hurtCooldown = 0.5;
+      }
+    }
+  }
+  if (player.hp <= 0) gameOver();
+}
+//FIM DO BLOCO/COLISOES, DANO E VIDA
+//COMEÇO XP E LEVEL
+let xpOrbs = [];
+
+function updateXpOrbs(dt){
+  for (let i = xpOrbs.length - 1; i >= 0; i--){
+    const o = xpOrbs[i];
+    const d = Math.hypot(player.x - o.x, player.y - o.y);
+    if (d < 120){
+      const ang = Math.atan2(player.y - o.y, player.x - o.x);
+      o.x += Math.cos(ang) * 300 * dt;
+      o.y += Math.sin(ang) * 300 * dt;
+    }
+    if (circlehit(player, o)){
+      player.xp += o.value;
+      xpOrbs.splice(i, 1);
+      checkLevelUp();
+    }
+  }
+}
+
+function drawXpOrbs(){
+  ctx.fillStyle = '#6be675';
+  for (const o of xpOrbs){
+    ctx.beginPath();
+    ctx.arc(o.x - camera.x, o.y - camera.y, o.radius, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function checkLevelUp(){
+  if (player.xp >= player.xpToNext && player.level < 5){
+    player.xp -= player.xpToNext;
+    player.level += 1;
+    player.xpToNext = Math.floor(player.xpToNext * 1.6);
+    openUpgradeScreen();
+    if (player.level === 5) prepareBossLevel();
+  }
+}
+//FIM DO BLOCO/XP E LEVEL
+//COMEÇO TELA DE UPGRADE
+const allUpgrades = [
+  { name:"Mais Dano", desc:"+5 de dano na arma", apply: () => weapon.damage += 5 },
+  { name:"Cadência", desc:"Dispara mais rápido", apply: () => weapon.fireRate = Math.max(0.1, weapon.fireRate * 0.8) },
+  { name:"Vida Extra", desc:"+30 de vida máxima", apply: () => { player.maxHp += 30; player.hp += 30; } },
+  { name:"Velocidade", desc:"+15% velocidade de movimento", apply: () => player.speed *= 1.15 },
+  { name:"Alcance", desc:"Arma atinge inimigos mais longe", apply: () => weapon.range += 100 },
+];
+
+let gamePaused = false;
+
+function openUpgradeScreen(){
+  gamePaused = true;
+  const choices = pickRandom(allUpgrades, 3);
+  const screen = document.getElementById('upgrade-screen');
+  screen.innerHTML = '';
+  screen.style.display = 'flex';
+  for (const up of choices){
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#222;color:#fff;padding:20px;border-radius:12px;width:180px;cursor:pointer;text-align:center;font-family:sans-serif;';
+    card.innerHTML = `<h3>${up.name}</h3><p>${up.desc}</p>`;
+    card.onclick = () => {
+      up.apply();
+      screen.style.display = 'none';
+      gamePaused = false;
+    };
+    screen.appendChild(card);
+  }
+}
+
+function pickRandom(arr, n){
+  const copy = [...arr];
+  const result = [];
+  for (let i = 0; i < n && copy.length; i++){
+    const idx = Math.floor(Math.random() * copy.length);
+    result.push(copy.splice(idx, 1)[0]);
+  }
+  return result;
+}
+//FIM TELA DE UPGRADE
+//COMEÇO NEW TYPE ENEMY
+const enemyTypes = {
+  grunt:  { hp: 20,  speed: 90,  radius: 14, damage: 8,  xp: 2, color: '#c65d5d', sprite: sprites.grunt },
+  runner: { hp: 12,  speed: 170, radius: 11, damage: 6,  xp: 3, color: '#e0a34d', sprite: sprites.runner },
+  tank:   { hp: 70,  speed: 55,  radius: 22, damage: 14, xp: 6, color: '#7a5dc6', sprite: sprites.tank },
+};
+function currentEnemyPool(){
+  // nível 1-2: só grunt | nível 3-4: + runner | nível 5: + tank
+  const pool = [enemyTypes.grunt];
+  if (player.level >= 3) pool.push(enemyTypes.runner);
+  if (player.level >= 5) pool.push(enemyTypes.tank);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+//FIM NEW TYPE ENEMY
+//COMEÇO BOSS LEVEL
+let boss = null;
+
+function prepareBossLevel(){
+  enemies = [];
+  spawnInterval = 999999;
+  boss = {
+    x: player.x + 500, y: player.y,
+    hp: 500, maxHp: 500, speed: 70, radius: 40,
+    damage: 20, color: '#ff2b2b', isBoss: true
+  };
+}
+
+function updateBoss(dt){
+  if (!boss) return;
+  const ang = Math.atan2(player.y - boss.y, player.x - boss.x);
+  boss.x += Math.cos(ang) * boss.speed * dt;
+  boss.y += Math.sin(ang) * boss.speed * dt;
+
+  if (circlehit(player, boss)){
+    player._hurtCooldown = (player._hurtCooldown || 0) - dt;
+    if (player._hurtCooldown <= 0){ player.hp -= boss.damage; player._hurtCooldown = 0.6; }
+  }
+  for (let i = projectiles.length - 1; i >= 0; i--){
+    const p = projectiles[i];
+    if (circlehit(p, boss)){
+      boss.hp -= p.damage;
+      projectiles.splice(i, 1);
+      if (boss.hp <= 0){ boss = null; onDemoComplete(); }
+    }
+  }
+  if (player.hp <= 0) gameOver();
+}
+
+function drawBoss(){
+  const size = boss.radius * 2;
+  ctx.drawImage(sprites.boss, boss.x - camera.x - boss.radius, boss.y - camera.y - boss.radius, size, size);
+}
+//FIM BOSS LEVEL
+//COMEÇO DEMO COMPLETE
+function onDemoComplete(){
+    gamePaused = true;
+    showEndScreen("Parabéns! Você derrotou o chefe final!");
+}
+
+function gameOver(){
+    gamePaused = true;
+    showEndScreen("Você foi derrotado...");
+}
+
+function showEndScreen(message){
+    const screen = document.getElementById('upgrade-screen');
+    screen.innerHTML = `
+        <div style="text-align:center;color:#fff;font-family:sans-serif;">
+            <h1>${message}</h1>
+            <button onclick="location.reload()" style="padding:12px 24px;font-size:16px;cursor:pointer;">Reiniciar</button>
+        </div>`;
+    screen.style.display = 'flex';
+}
+//FIM DEMO COMPLETE
+//COMEÇO HUD
+function drawHud(){
+  const barW = 220, barH = 24;
+  const barX = canvas.width/2 - barW/2; // ← centralizado horizontalmente
+  const barY = 20;                       
+
+  // barra de vida
+  ctx.drawImage(sprites.heartIcon, barX - 32, barY - 3, 28, 28);
+  ctx.fillStyle = '#3a3a3a';
+  ctx.fillRect(barX, barY, barW, barH);
+  const hpRatio = Math.max(0, player.hp / player.maxHp);
+  ctx.fillStyle = '#e03a3a';
+  ctx.fillRect(barX, barY, barW * hpRatio, barH);
+  ctx.strokeStyle = '#000';
+  ctx.strokeRect(barX, barY, barW, barH);
+
+  // barra de xp
+  const xpY = barY + barH + 12;
+  ctx.drawImage(sprites.xpIcon, barX - 32, xpY - 5, 24, 24);
+  ctx.fillStyle = '#3a3a3a';
+  ctx.fillRect(barX, xpY, barW, 14);
+  const xpRatio = player.xp / player.xpToNext;
+  ctx.fillStyle = '#f4d35e';
+  ctx.fillRect(barX, xpY, barW * xpRatio, 14);
+  ctx.strokeStyle = '#000';
+  ctx.strokeRect(barX, xpY, barW, 14);
+
+  // texto de nível
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px monospace';
+  ctx.fillText(`Nível ${player.level}`, barX, xpY + 34);
+}
+//FIM HUD
+
+let lastime = null;
+function gameLoop(timestamp) {
+    if (lastime === null) lastime = timestamp;
+    const deltaTime = Math.min((timestamp - lastime) / 1000, 0.1);
+    lastime = timestamp;
+
+    update(deltaTime);
+    render();
+
+    requestAnimationFrame(gameLoop);
+}
+function update(deltaTime) {
+    if (gamePaused) return;
+    updatePlayer(deltaTime);
+    updateCamera();
+    updateWeapon(deltaTime);
+    updateProjectiles(deltaTime);
+    updateSpawning(deltaTime);
+    updateEnemies(deltaTime);
+    updateCollisions(deltaTime);
+    updateXpOrbs(deltaTime);
+    updateBoss(deltaTime);
+}
+function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawWorldBackground(); 
+    drawDecorations();     
+    drawPlayer();
+    drawProjectiles();
+    drawEnemies();
+    drawXpOrbs();
+    if (boss) drawBoss();
+    drawHud();
+    drawCrosshair();
+}
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
